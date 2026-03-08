@@ -16,7 +16,7 @@ export function createApiRouter(config) {
   router.get("/health", (_req, res) => {
     res.json({
       ok: true,
-      service: "real-email-checker-api",
+      service: "smtp-email-validator-api",
       timestamp: new Date().toISOString(),
     });
   });

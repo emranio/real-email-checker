@@ -1,5 +1,5 @@
 {
-    "name": "real-email-checker",
+    "name": "smtp-email-validator",
     "version": "1.0.0",
     "private": true,
     "type": "module",
