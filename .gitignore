@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+reset.sh
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+data/*

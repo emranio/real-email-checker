@@ -1,0 +1,20 @@
+[Unit]
+Description=SMTP Email Validator Node.js Backend
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=15
+
+[Service]
+Type=simple
+WorkingDirectory=/home/sigmative/Desktop/server-manager/www/system/smtp-email-validator
+Environment=NODE_ENV=production
+EnvironmentFile=/home/sigmative/Desktop/server-manager/www/system/smtp-email-validator/.env
+ExecStart=/usr/bin/env node src/backend/server.js
+Restart=on-failure
+RestartSec=5
+User=sigmative
+Group=sigmative
+
+[Install]
+WantedBy=multi-user.target
