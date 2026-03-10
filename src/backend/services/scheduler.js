@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import crypto from "node:crypto";
 import pLimit from "p-limit";
 import { getAuthDb } from "./authDb.js";
@@ -6,6 +8,158 @@ import { validateEmail, setDnsTimeout } from "./emailValidator.js";
 const activeWorkers = new Map();
 let intervalId = null;
 let config = null;
+
+function toLogFilenameTimestamp(value) {
+  return String(value || new Date().toISOString())
+    .replace(/\s+/g, "T")
+    .replace(/[:.]/g, "-");
+}
+
+function stringifyLogValue(value) {
+  if (value == null || value === "") {
+    return "-";
+  }
+
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
+function formatProcessedEmailLine(resultRow) {
+  const status = resultRow.is_valid ? "VALID" : "INVALID";
+  const details = [
+    `reason=${stringifyLogValue(resultRow.reason)}`,
+    `roleBased=${resultRow.is_role_based ? "yes" : "no"}`,
+    `disposable=${resultRow.is_disposable ? "yes" : "no"}`,
+    `unlikely=${resultRow.is_unlikely ? "yes" : "no"}`,
+    `mx=${stringifyLogValue(resultRow.has_mx)}`,
+    `aRecord=${stringifyLogValue(resultRow.has_a_record)}`,
+    `smtp=${stringifyLogValue(resultRow.has_smtp)}`,
+    `smtpChecked=${resultRow.smtp_checked ? "yes" : "no"}`,
+  ];
+
+  return `${resultRow.email} | ${status} | ${details.join(" | ")}`;
+}
+
+function appendLinesToFile(filePath, lines) {
+  if (!filePath || !Array.isArray(lines) || lines.length === 0) {
+    return;
+  }
+
+  fs.appendFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
+}
+
+function createRunLogWriter(db, runId) {
+  if (!config?.keepEmailLog) {
+    return null;
+  }
+
+  try {
+    const run = db
+      .prepare(
+        `SELECT vr.id, vr.total_count, vr.input_source, vr.original_filename,
+                vr.options_json, vr.created_at, vr.started_at,
+                u.id AS user_id, u.username, u.email
+         FROM validation_runs vr
+         LEFT JOIN users u ON u.id = vr.user_id
+         WHERE vr.id = ?`,
+      )
+      .get(runId);
+
+    if (!run) {
+      return null;
+    }
+
+    const logsDir = config.emailLogsDir;
+    fs.mkdirSync(logsDir, { recursive: true });
+
+    const startedAt = run.started_at || new Date().toISOString();
+    const filePath = path.join(
+      logsDir,
+      `${toLogFilenameTimestamp(startedAt)}-${run.id}.txt`,
+    );
+
+    if (!fs.existsSync(filePath)) {
+      const headerLines = [
+        "=== Validation Run Log ===",
+        `Run ID: ${run.id}`,
+        `Total emails: ${run.total_count}`,
+        `Run at: ${startedAt}`,
+        `Created at: ${stringifyLogValue(run.created_at)}`,
+        `Input source: ${stringifyLogValue(run.input_source)}`,
+        `Original filename: ${stringifyLogValue(run.original_filename)}`,
+        `Run by: ${stringifyLogValue(run.username)} <${stringifyLogValue(run.email)}>`,
+        `User ID: ${stringifyLogValue(run.user_id)}`,
+        `Options: ${stringifyLogValue(JSON.parse(run.options_json || "{}"))}`,
+        "",
+        "--- Processed emails ---",
+      ];
+
+      fs.writeFileSync(filePath, `${headerLines.join("\n")}\n`, "utf8");
+    } else {
+      appendLinesToFile(filePath, [
+        "",
+        `--- Run resumed at ${new Date().toISOString()} ---`,
+      ]);
+    }
+
+    let writeFailed = false;
+    const safeAppend = (lines) => {
+      if (writeFailed) {
+        return;
+      }
+
+      try {
+        appendLinesToFile(filePath, lines);
+      } catch (error) {
+        writeFailed = true;
+        console.error(`Failed to write email log for run ${runId}:`, error);
+      }
+    };
+
+    return {
+      appendProcessedRows(rows) {
+        safeAppend(rows.map((row) => formatProcessedEmailLine(row)));
+      },
+      appendPause() {
+        safeAppend(["", `--- Run paused at ${new Date().toISOString()} ---`]);
+      },
+      appendSummary(status) {
+        const summary = db
+          .prepare(
+            `SELECT status, total_count, processed_count, valid_count, invalid_count,
+                    created_at, started_at, completed_at, updated_at, error_message
+             FROM validation_runs WHERE id = ?`,
+          )
+          .get(runId);
+
+        if (!summary) {
+          return;
+        }
+
+        safeAppend([
+          "",
+          "=== Run Summary ===",
+          `Final status: ${stringifyLogValue(status || summary.status)}`,
+          `Total emails: ${stringifyLogValue(summary.total_count)}`,
+          `Processed emails: ${stringifyLogValue(summary.processed_count)}`,
+          `Valid emails: ${stringifyLogValue(summary.valid_count)}`,
+          `Invalid emails: ${stringifyLogValue(summary.invalid_count)}`,
+          `Created at: ${stringifyLogValue(summary.created_at)}`,
+          `Started at: ${stringifyLogValue(summary.started_at)}`,
+          `Completed at: ${stringifyLogValue(summary.completed_at)}`,
+          `Last updated at: ${stringifyLogValue(summary.updated_at)}`,
+          `Error: ${stringifyLogValue(summary.error_message)}`,
+        ]);
+      },
+    };
+  } catch (error) {
+    console.error(`Failed to initialize email log for run ${runId}:`, error);
+    return null;
+  }
+}
 
 export function startScheduler(cfg) {
   config = cfg;
@@ -62,6 +216,7 @@ async function runWorker(runId) {
   const concurrency = config.runWorkerConcurrency || 20;
   const limit = pLimit(concurrency);
   const batchSize = Math.max(1, concurrency);
+  const runLogWriter = createRunLogWriter(db, runId);
 
   try {
     const optionsRow = db
@@ -114,6 +269,7 @@ async function runWorker(runId) {
         .get(runId);
 
       if (!pauseCheck || pauseCheck.status === "canceled") {
+        runLogWriter?.appendSummary("canceled");
         return "stop";
       }
 
@@ -121,6 +277,7 @@ async function runWorker(runId) {
         db.prepare(
           "UPDATE validation_runs SET status = 'paused', pause_requested = 0, updated_at = datetime('now') WHERE id = ?",
         ).run(runId);
+        runLogWriter?.appendPause();
         return "paused";
       }
 
@@ -171,6 +328,12 @@ async function runWorker(runId) {
       );
 
       batchUpdate(batchResults);
+      runLogWriter?.appendProcessedRows(
+        unchecked.map((row, index) => ({
+          ...row,
+          ...batchResults[index],
+        })),
+      );
 
       const postBatchPauseState = checkForPauseOrCancel();
       if (postBatchPauseState) return;
@@ -179,11 +342,13 @@ async function runWorker(runId) {
     db.prepare(
       "UPDATE validation_runs SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND status = 'running'",
     ).run(runId);
+    runLogWriter?.appendSummary("completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
     db.prepare(
       "UPDATE validation_runs SET status = 'failed', error_message = ?, updated_at = datetime('now') WHERE id = ?",
     ).run(message, runId);
+    runLogWriter?.appendSummary("failed");
   }
 }
 

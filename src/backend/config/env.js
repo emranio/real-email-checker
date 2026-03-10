@@ -50,6 +50,8 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
   sqliteDbPath:
     process.env.SQLITE_DB_PATH || path.resolve(rootDir, "data", "app.sqlite3"),
+  keepEmailLog: toBoolean(process.env.KEEP_EMAIL_LOG, false),
+  emailLogsDir: path.resolve(rootDir, "data", "logs"),
   distDir: path.resolve(rootDir, "dist"),
   maxConcurrentRuns: toNumber(process.env.MAX_CONCURRENT_RUNS, 5),
   runWorkerConcurrency: toNumber(process.env.RUN_WORKER_CONCURRENCY, 20),

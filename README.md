@@ -25,6 +25,7 @@ A privacy-first full-stack email validation app built with a Vite/React frontend
 	- `JWT_SECRET` — required for production deployments
 	- `JWT_EXPIRES_IN` — JWT lifetime, default `7d`
 	- `SQLITE_DB_PATH` — SQLite database path, default `./data/app.sqlite3`
+	- `KEEP_EMAIL_LOG` — when `true`, writes one text log per run to `data/logs`, default `false`
 	- `MAX_CONCURRENT_RUNS` — concurrent run workers, default `5`
 	- `RUN_WORKER_CONCURRENCY` — per-run validation concurrency, default `20`
 	- `SCHEDULER_POLL_MS` — scheduler poll interval, default `2000`
@@ -42,6 +43,7 @@ A privacy-first full-stack email validation app built with a Vite/React frontend
 ### First-run behavior
 
 - The backend creates the parent directory for the SQLite database automatically.
+- If `KEEP_EMAIL_LOG=true`, the backend also creates `data/logs` automatically.
 - The database schema is initialized on startup.
 - A demo account is seeded if it does not already exist:
   - username: `admin`
@@ -238,6 +240,13 @@ What is stored by the app server for authenticated runs:
 - run metadata: source type, selected options, filename, counters, timestamps, status
 - input emails for the run
 - per-email validation results and reasons
+
+Optional additional storage when `KEEP_EMAIL_LOG=true`:
+
+- one text file per run in `data/logs`
+- a run header with metadata such as run id, user, timestamps, and options
+- one processed-email line per checked address
+- a final run summary when the run finishes
 
 If you need strict no-retention behavior, use the direct validation endpoints in a way that does not create stored runs, or delete runs after export.
 
